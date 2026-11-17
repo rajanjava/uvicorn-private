@@ -827,6 +827,25 @@ async def test_http10_request(http_protocol_cls: type[HTTPProtocol]):
     assert b"Version: 1.0" in protocol.transport.buffer
 
 
+async def test_http10_streaming_response_not_chunked(http_protocol_cls: type[HTTPProtocol]):
+    # RFC 9112 section 6.1: a server must not send a chunked response to an
+    # HTTP/1.0 client; the body is delimited by the connection close instead.
+    async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/plain")]})
+        await send({"type": "http.response.body", "body": b"Hello", "more_body": True})
+        await send({"type": "http.response.body", "body": b" world", "more_body": False})
+
+    protocol = get_connected_protocol(app, http_protocol_cls)
+    protocol.data_received(HTTP10_GET_REQUEST)
+    await protocol.loop.run_one()
+
+    header_block, body = protocol.transport.buffer.split(b"\r\n\r\n", 1)
+    assert b"HTTP/1.1 200 OK" in header_block
+    assert b"transfer-encoding: chunked" not in header_block.lower()
+    assert body == b"Hello world"
+    assert protocol.transport.is_closing()
+
+
 async def test_root_path(http_protocol_cls: type[HTTPProtocol]):
     async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
         assert scope["type"] == "http"

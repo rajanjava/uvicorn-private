@@ -412,7 +412,7 @@ class RequestResponseCycle:
         self.response_started = False
         self.response_complete = False
         self.chunked_encoding: bool | None = None
-        self.expected_content_length = 0
+        self.expected_content_length: int | None = 0
 
     # ASGI exception wrapper
     async def run_asgi(self, app: ASGI3Application) -> None:
@@ -515,8 +515,14 @@ class RequestResponseCycle:
 
             if self.chunked_encoding is None and self.scope["method"] != "HEAD" and status_code not in (204, 304):
                 # Neither content-length nor transfer-encoding specified
-                self.chunked_encoding = True
-                content.append(b"transfer-encoding: chunked\r\n")
+                if self.scope["http_version"] == "1.0":
+                    # RFC 9112 section 6.1: don't use chunked encoding with
+                    # HTTP/1.0 clients; the body is delimited by the
+                    # connection close instead.
+                    self.expected_content_length = None
+                else:
+                    self.chunked_encoding = True
+                    content.append(b"transfer-encoding: chunked\r\n")
 
             content.append(b"\r\n")
             self.transport.write(b"".join(content))
@@ -542,15 +548,16 @@ class RequestResponseCycle:
                 self.transport.write(b"".join(content))
             else:
                 num_bytes = len(body)
-                if num_bytes > self.expected_content_length:
-                    raise RuntimeError("Response content longer than Content-Length")
-                else:
-                    self.expected_content_length -= num_bytes
+                if self.expected_content_length is not None:
+                    if num_bytes > self.expected_content_length:
+                        raise RuntimeError("Response content longer than Content-Length")
+                    else:
+                        self.expected_content_length -= num_bytes
                 self.transport.write(body)
 
             # Handle response completion
             if not more_body:
-                if self.expected_content_length != 0:
+                if self.expected_content_length is not None and self.expected_content_length != 0:
                     raise RuntimeError("Response content shorter than Content-Length")
                 self.response_complete = True
                 self.message_event.set()
