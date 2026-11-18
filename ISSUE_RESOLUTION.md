@@ -46,6 +46,11 @@ AssertionError: assert b'transfer-encoding: chunked' not in b'http/1.1 200 ok\r\
 
 ---
 
+## Solution Approach
+1. **Enforce RFC 9112 §6.1 Compliance:** HTTP/1.0 does not define `Transfer-Encoding: chunked`. Sending chunked framing to an HTTP/1.0 client breaks protocol compatibility and corrupts client response parsing.
+2. **Protocol-Version Guard in Response Framing:** In `uvicorn/protocols/http/httptools_impl.py`, inspected the negotiated HTTP version before enabling chunked transfer encoding; for HTTP/1.0 streaming responses without `Content-Length`, omit `Transfer-Encoding: chunked` and signal response end via connection close instead.
+3. **TDD & Regression Safety:** Added `test_http10_streaming_response_not_chunked` in `tests/protocols/test_http.py` verifying HTTP/1.0 responses stream raw body bytes cleanly while HTTP/1.1 keeps chunked transfer encoding.
+
 ## 4. Code Fix
 In `uvicorn/protocols/http/httptools_impl.py`:
 1. When checking headers in `RequestResponseCycle.send()`:
